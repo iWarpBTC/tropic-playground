@@ -37,56 +37,6 @@ void setup()
 
 void loop()
 {
-  static bool sent = false;
-  if (!sent)
-  {
-    sent = true;
-
-    // Ručně připrav L2 Get_Info_Req (0x01 0x02 0x01 0x00 + CRC)
-    uint8_t test_frame[6] = {0x01, 0x02, 0x01, 0x00, 0x2B, 0x92};
-
-    // Pošli L2 požadavek
-    digitalWrite(CS_PIN, LOW);
-    for (int i = 0; i < 6; i++)
-    {
-      SPI.transfer(test_frame[i]);
-    }
-    digitalWrite(CS_PIN, HIGH);
-
-    // Počkej na odpověď
-    if (!wait_for_ready())
-    {
-      Serial.println(F("❌ TROPIC01 neodpovídá"));
-      return;
-    }
-
-    // Čti odpověď
-    digitalWrite(CS_PIN, LOW);
-    uint8_t status = SPI.transfer(0x00);
-    uint8_t length = SPI.transfer(0x00);
-    Serial.print(F("📥 STATUS: 0x"));
-    Serial.println(status, HEX);
-    Serial.print(F("📥 LENGTH: "));
-    Serial.println(length);
-
-    for (int i = 0; i < length + 2; i++)
-    {
-      spi_rx[i] = SPI.transfer(0x00);
-    }
-    digitalWrite(CS_PIN, HIGH);
-
-    Serial.print(F("📥 DATA+CRC: "));
-    for (int i = 0; i < length + 2; i++)
-    {
-      Serial.print(spi_rx[i], HEX);
-      Serial.print(" ");
-    }
-    Serial.println();
-
-    delay(60000); // počkej 60 sekund než čteš odpověď
-    return;
-  }
-
   if (Serial.available() < 2)
     return;
 
