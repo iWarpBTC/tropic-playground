@@ -22,7 +22,7 @@ def decode_provisioning_date(byte0: int, byte1: int) -> str:
 
 
 def print_chip_id_struct(buffer: bytes):
-    print("🔎 CHIP_ID STRUCT DUMP")
+    print("🔎 CHIP_ID STRUCT DUMP:")
 
     # Version
     version = ".".join(str(b) for b in buffer[0:4])
@@ -94,3 +94,51 @@ def print_chip_id_struct(buffer: bytes):
 
     # Batch ID
     print("📦 ID šarže:", "".join(f"{buffer[i]:02X}" for i in range(100, 105)))
+
+    print()
+
+def analyze_certs(certs):
+    """Analyze certificates and print key information"""
+    if not certs:
+        print("❌ Žádné certifikáty k analýze")
+        return
+    
+    import hashlib
+        
+    for i, cert in enumerate(certs):
+        print(f"\n📜 Certifikát {i+1} ({len(cert)} bajtů):")
+        # Print first 16 bytes as hex
+        print(f"  Hlavička: {' '.join(f'{b:02X}' for b in cert[:16])}...")
+        
+        # Calculate fingerprints
+        sha1 = hashlib.sha1(cert).hexdigest()
+        sha256 = hashlib.sha256(cert).hexdigest()
+        print(f"  Fingerprint (SHA1): {':'.join(sha1[j:j+2] for j in range(0, len(sha1), 2))}")
+        print(f"  Fingerprint (SHA256): {sha256[:16]}...{sha256[-16:]}")
+        
+        # Look for common certificate markers
+        if len(cert) > 2 and cert[0] == 0x30:
+            print(f"  Typ: ASN.1 DER formát")
+            
+            # Try to find certificate name and other text fields
+            found_cn = False
+            for j in range(len(cert)-10):
+                # Look for CN= (Common Name) in the certificate
+                if cert[j:j+3] == b'CN=':
+                    end_idx = j+3
+                    while end_idx < len(cert) and cert[end_idx] != 0 and cert[end_idx] != 44:  # 44 is comma
+                        end_idx += 1
+                    cn_value = cert[j:end_idx].decode('ascii', errors='ignore')
+                    print(f"  Název: {cn_value}")
+                    found_cn = True
+                    break
+                    
+            # If no CN found, look for any text strings
+            if not found_cn:
+                for j in range(len(cert)-5):
+                    if all(32 <= b <= 126 for b in cert[j:j+5]):
+                        text_chunk = cert[j:j+min(20, len(cert)-j)].decode('ascii', errors='ignore')
+                        print(f"  Text: {text_chunk}...")
+                        break
+        else:
+            print(f"  Typ: Neznámý formát")
