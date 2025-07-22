@@ -16,14 +16,31 @@ bool wait_for_ready()
 {
   for (int i = 0; i < 50; i++)
   {
-    delay(10);
+    delay(25);
     digitalWrite(CS_PIN, LOW);
-    uint8_t status = SPI.transfer(0xAA); // ping čip
+    uint8_t status = SPI.transfer(0xAA);
 
-    if (status & 0x01)
+    if (status == 0xFF)
+    {
+      digitalWrite(CS_PIN, HIGH);
+      continue;
+    }
+
+    if (status & 0x02) // ALARM
+    {
+      digitalWrite(CS_PIN, HIGH);
+      return false;
+    }
+
+    if (status & 0x01) // READY
+    {
+      // CS zůstane LOW – následuje čtení
       return true;
+    }
+
+    digitalWrite(CS_PIN, HIGH);
   }
-  digitalWrite(CS_PIN, HIGH);
+
   return false;
 }
 

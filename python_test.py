@@ -1,6 +1,8 @@
 import serial
 import time
 
+from cryptography.hazmat.primitives.asymmetric import x25519
+
 from crc import add_crc, calc_crc
 from utils import print_chip_id_struct, analyze_certs
 
@@ -8,7 +10,7 @@ from utils import print_chip_id_struct, analyze_certs
 PORT = '/dev/tty.usbmodem141401'  # uprav dle potřeby
 BAUDRATE = 115200
 TIMEOUT = 2
-DEBUG = False
+DEBUG = True
 
 def send_frame(frame: bytes, ser: serial.Serial):  
     full_frame = [0xA5, len(frame)] + list(frame)
@@ -17,6 +19,7 @@ def send_frame(frame: bytes, ser: serial.Serial):
         print(" ".join(f"{b:02X}" for b in full_frame))
     ser.write(bytes([0xA5, len(frame)]))
     ser.write(frame)
+    time.sleep(0.1)
 
 def read_frame(ser: serial.Serial) -> bytes:
     prefix = ser.read(2)
@@ -160,12 +163,52 @@ def get_certs(ser: serial.Serial):
     
     return certs
 
+def make_handshake(ser: serial.Serial):
+    # 1️⃣ Vygeneruj ephemeral X25519 keypair
+    eph_priv = x25519.X25519PrivateKey.generate()
+    eph_pub = eph_priv.public_key().public_bytes_raw()  # 32 bytů, little-endian
+
+    # 2️⃣ Vyber slot pairing klíče (např. SH0PUB)
+    pairing_slot = 0
+    req_data = eph_pub + bytes([pairing_slot])
+
+    # 3️⃣ Sestav a pošli handshake rámec
+    frame = get_frame(0x02, req_data)
+    send_frame(frame, ser)
+
+    # 4️⃣ Zpracuj odpověď
+    payload = read_frame(ser)
+    if len(payload) != 48:
+        raise RuntimeError(f"Handshake response má nečekanou délku: {len(payload)} bajtů")
+
+    e_tpub = payload[:32]
+    t_tauth = payload[32:]
+
+    print(f"🔑 TROPIC01 ephemeral public key: {e_tpub.hex()}")
+    print(f"🔐 T_TAUTH tag: {t_tauth.hex()}")
+
+    # 5️⃣ Odvoď shared secret
+    shared_secret = eph_priv.exchange(x25519.X25519PublicKey.from_public_bytes(e_tpub))
+    print(f"🧩 Sdílený tajný klíč: {shared_secret.hex()}")
+
+    # ⚠️ Zde by se měl ještě odvodit kAUTH a ověřit T_TAUTH (není implementováno)
+
+    return {
+        "eph_priv": eph_priv,
+        "eph_pub": eph_pub,
+        "chip_ephemeral_pub": e_tpub,
+        "t_auth_tag": t_tauth,
+        "shared_secret": shared_secret,
+    }
+
 
 # === Odeslání na Arduino ===
 ser = serial.Serial(PORT, BAUDRATE, timeout=TIMEOUT)
 time.sleep(2)  # počkej na reset
 
-get_chip_id(ser)
+#get_chip_id(ser)
 get_fw_ver(ser)
-certs = get_certs(ser)
-analyze_certs(certs)
+#certs = get_certs(ser)
+#analyze_certs(certs)
+
+make_handshake(ser)
