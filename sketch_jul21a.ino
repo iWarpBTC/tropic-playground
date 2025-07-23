@@ -12,35 +12,12 @@
 uint8_t spi_rx[MAX_LEN];
 uint8_t spi_tx[MAX_LEN];
 
-bool wait_for_ready()
+void send_error_resp(uint8_t status)
 {
-  for (int i = 0; i < 50; i++)
-  {
-    delay(25);
-    digitalWrite(CS_PIN, LOW);
-    uint8_t status = SPI.transfer(0xAA);
-
-    if (status == 0xFF)
-    {
-      digitalWrite(CS_PIN, HIGH);
-      continue;
-    }
-
-    if (status & 0x02) // ALARM
-    {
-      return false;
-    }
-
-    if (status & 0x01) // READY
-    {
-      // CS zůstane LOW – následuje čtení
-      return true;
-    }
-
-    digitalWrite(CS_PIN, HIGH);
-  }
-
-  return false;
+  Serial.write(START_BYTE_OUT);
+  Serial.write(2); // STATUS + LENGTH
+  Serial.write(status);
+  Serial.write(0);
 }
 
 void setup()
@@ -53,13 +30,15 @@ void setup()
 
 void loop()
 {
+  // Máme v bufferu aspoň 2B?
   if (Serial.available() < 2)
     return;
 
+  // Zkontroluj start byte a délku
   if (Serial.read() != START_BYTE_IN)
     return;
   uint8_t len = Serial.read();
-  if (len == 0 || len > MAX_LEN)
+  if (len > MAX_LEN)
     return;
 
   // Nacti SPI payload od PC
@@ -76,28 +55,60 @@ void loop()
   digitalWrite(CS_PIN, HIGH);
 
   // Pošli opakovaně Get_Response (0x00) dokud není připraven
-  if (!wait_for_ready())
-    return;
-
-  digitalWrite(CS_PIN, LOW);
-  uint8_t status = SPI.transfer(0x00);
-  uint8_t length = SPI.transfer(0x00);
-  if (length + 2 > MAX_LEN)
+  for (int i = 0; i < 50; i++)
   {
+    digitalWrite(CS_PIN, LOW);
+    uint8_t chip_status = SPI.transfer(0xAA);
+
+    if (chip_status & 0x04) // START
+    {
+      send_error_resp(0xB4); // ERROR_START
+      digitalWrite(CS_PIN, HIGH);
+      return;
+    }
+
+    if (chip_status & 0x02) // ALARM
+    {
+      send_error_resp(0xB2); // ERROR_START
+      digitalWrite(CS_PIN, HIGH);
+      return;
+    }
+
+    if (chip_status & 0x01) // READY
+    {
+      uint8_t status = SPI.transfer(0x00);
+      uint8_t length = SPI.transfer(0x00);
+
+      if (status == 0xFF)
+      {
+        digitalWrite(CS_PIN, HIGH);
+        delay(25);
+        continue;
+      }
+
+      if (length + 2 > MAX_LEN)
+      {
+        digitalWrite(CS_PIN, HIGH);
+        return;
+      }
+
+      for (uint8_t i = 0; i < length + 2; i++)
+      {
+        spi_rx[i] = SPI.transfer(0x00);
+      }
+      digitalWrite(CS_PIN, HIGH);
+
+      // Pošli odpověď zpět na PC
+      Serial.write(START_BYTE_OUT);
+      Serial.write(length + 4); // STATUS + LENGTH + PAYLOAD + CRC (2B)
+      Serial.write(status);
+      Serial.write(length);
+      Serial.write(spi_rx, length + 2);
+
+      return;
+    }
+
     digitalWrite(CS_PIN, HIGH);
-    return;
+    delay(25);
   }
-
-  for (uint8_t i = 0; i < length + 2; i++)
-  {
-    spi_rx[i] = SPI.transfer(0x00);
-  }
-  digitalWrite(CS_PIN, HIGH);
-
-  // Pošli odpověď zpět na PC
-  Serial.write(START_BYTE_OUT);
-  Serial.write(length + 4); // STATUS + LENGTH + PAYLOAD + CRC (2B)
-  Serial.write(status);
-  Serial.write(length);
-  Serial.write(spi_rx, length + 2);
 }
