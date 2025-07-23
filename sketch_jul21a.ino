@@ -28,7 +28,6 @@ bool wait_for_ready()
 
     if (status & 0x02) // ALARM
     {
-      digitalWrite(CS_PIN, HIGH);
       return false;
     }
 

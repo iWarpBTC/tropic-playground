@@ -1,3 +1,5 @@
+from cryptography.hazmat.backends import default_backend
+
 def decode_provisioning_date(byte0: int, byte1: int) -> str:
     date_value = (byte0 << 8) | byte1
     year = (date_value // 1000) + 2023
@@ -142,3 +144,17 @@ def analyze_certs(certs):
                         break
         else:
             print(f"  Typ: Neznámý formát")
+
+def extract_stpub_from_cert(cert_data):
+    """Extract STPUB (public key) from X.509 certificate"""
+    try:
+        from asn1crypto import x509 as asn1_x509
+
+        cert = asn1_x509.Certificate.load(bytes(cert_data))
+        pubkey_bytes = cert.public_key['public_key'].native
+
+        print(f"🔑 STPUB extracted from certificate: {pubkey_bytes.hex()}")
+        return pubkey_bytes
+    except Exception as e:
+        print(f"❌ Failed to extract STPUB from certificate: {e}")
+        return b''
