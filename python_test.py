@@ -1,86 +1,27 @@
 import serial
 import time
-import base64
 
 import hashlib
 from cryptography.hazmat.primitives.asymmetric import x25519
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from crc import add_crc, calc_crc
+from l2 import send_frame, get_frame, read_frame, get_resend_response
 from utils import print_chip_id_struct, analyze_certs, extract_stpub_from_cert
 
 # === Konfigurace ===
 PORT = '/dev/tty.usbmodem141401'  # uprav dle potřeby
 BAUDRATE = 115200
 TIMEOUT = 2
-DEBUG = True
 
 PROTOCOL_NAME = b"Noise_KK1_25519_AESGCM_SHA256\x00\x00\x00"
-
-def send_frame(frame: bytes, ser: serial.Serial):
-    full_frame = bytes([0xA5, len(frame)]) + frame
-    if DEBUG:
-        print("📤 Posílám rámec:")
-        print(" ".join(f"{b:02X}" for b in full_frame[2:]))
-    ser.write(full_frame)
-
-def get_frame(req_id: int, req_data: bytes) -> bytes:
-    frame = bytes([req_id, len(req_data)]) + req_data
-    return add_crc(frame)
-
-def get_resend_response(ser: serial.Serial):
-    frame = get_frame(0x10, b'')
-    send_frame(frame, ser)
-    return read_frame(ser)
-
-def read_frame(ser: serial.Serial) -> bytes:
-    prefix = ser.read(2)
-    #if DEBUG:
-        #print(f"📥 Prefix ({len(prefix)} bajty): {' '.join(f'{b:02X}' for b in prefix)}")
-    if len(prefix) != 2:
-        raise RuntimeError("Neúplný prefix")
-    if prefix[0] != 0x5A:
-        raise RuntimeError(f"Odpověď nezačíná bajtem 0x5A (dostali jsme {prefix[0]:02X})")
-    resp_len = prefix[1]
-    response = ser.read(resp_len)
-    if len(response) != resp_len:
-        raise RuntimeError("Neúplná odpověď z Arduina")
-    if len(response) < 4:
-        raise RuntimeError("Odpověď je příliš krátká (méně než 4 bajty)")
-    
-    if DEBUG:
-        print(f"📥 Response ({resp_len} bajty): {' '.join(f'{b:02X}' for b in response)}")
-    
-    status = response[0]
-    length = response[1]
-    if status != 0x01 and status != 0x02:
-        print(f"❌ Chyba v odpovědi: {status:02X}, očekáváno 0x01")
-        print(" ".join(f"{b:02X}" for b in response))
-        return b''
-    if length != resp_len - 4:
-        raise RuntimeError(f"Očekáváno {length} bajtů, dostáno {resp_len - 4}")
-
-    payload = response[:-2]
-    crc_recv = (response[-2] << 8) | response[-1]
-    crc_calc = calc_crc(payload)
-    if crc_calc == crc_recv:
-        if DEBUG:
-            print(f"✅ CRC OK: {crc_recv:04X}")
-        return payload[2:]
-    else:
-        raise RuntimeError(f"CRC nesouhlasí: očekáváno {crc_calc:04X}, dostáno {crc_recv:04X}")  
-    
+   
 def get_chip_id(ser: serial.Serial):
     req_data = bytes([0x01, 0x00])
     frame = get_frame(0x01, req_data)
     send_frame(frame, ser)
 
     payload = read_frame(ser)
-
-    # === Výpis ===
-    # print("\n📥 Odpověď z TROPIC01:")
-    # print(" ".join(f"{b:02X}" for b in payload))
 
     print_chip_id_struct(payload)
 
@@ -96,24 +37,16 @@ def get_fw_ver(ser: serial.Serial):
     send_frame(frame, ser)
 
     payload = read_frame(ser)
-    if DEBUG:
-        print("\n📥 Odpověď z TROPIC01:")
-        print(" ".join(f"{b:02X}" for b in payload))
+
     print(f"🔢 Verze RISCV firmware: {format_version(payload)}")
     print()
-    
-    # Example of using the format_version function
-    # test_payload = bytes([0x00, 0x01, 0x03, 0x00])
-    # print(f"Formatted version: {format_version(test_payload)}")
 
     req_data = bytes([0x04, 0x00])
     frame = get_frame(0x01, req_data)
     send_frame(frame, ser)
 
     payload = read_frame(ser)
-    if DEBUG:
-        print("\n📥 Odpověď z TROPIC01:")
-        print(" ".join(f"{b:02X}" for b in payload))
+
     print(f"🔢 Verze SPECT firmware: {format_version(payload)}")
     print()
 
@@ -123,9 +56,6 @@ def get_certs(ser: serial.Serial):
     send_frame(frame, ser)
 
     payload = read_frame(ser)
-    if DEBUG:
-        print("\n📥 Odpověď z TROPIC01:")
-        print(" ".join(f"{b:02X}" for b in payload))
 
     cert_store_ver = payload[0]
     if cert_store_ver != 0x01:
@@ -155,9 +85,6 @@ def get_certs(ser: serial.Serial):
         send_frame(frame, ser)
 
         payload = read_frame(ser)
-        if DEBUG:
-            print(f"\n📥 {block_index}. blok:")
-            print(" ".join(f"{b:02X}" for b in payload))
 
         all_cert_data.extend(payload)
 
@@ -312,12 +239,7 @@ def make_handshake(ser: serial.Serial, certs=None):
     # n = 0
     n = 0
     print(f"🔢 Initial nonce n = {n}")
-    
-    '''    # 5️⃣ Odvoď shared secret
-    shared_secret = dh1  # This is the same as eph_priv.exchange(x25519.X25519PublicKey.from_public_bytes(e_tpub))
-    print(f"🧩 Sdílený tajný klíč: {shared_secret.hex()}")
-    '''
-
+  
     # Verify T_TAUTH using AES-GCM with k_auth
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     from cryptography.exceptions import InvalidTag
@@ -344,11 +266,6 @@ def make_handshake(ser: serial.Serial, certs=None):
     print(f"🔐 Received T_TAUTH: {t_tauth.hex()} (length: {len(t_tauth)})")
     
     return {
-#        "eph_priv": eph_priv,
-#        "eph_pub": eph_pub,
-#        "chip_ephemeral_pub": e_tpub,
-#        "t_auth_tag": t_tauth,
-#        "k_auth": k_auth,
         "k_cmd": k_cmd,
         "k_res": k_res,
         "n": n,
@@ -440,42 +357,16 @@ def trigger_get_response(ser):
     """Trigger a response from TROPIC01"""
     print("🔄 Odesílám trigger pro získání odpovědi...")
     full_frame = [0xA5, 0x00]
-    #if DEBUG:
-    #    print("📤 Posílám rámec:")
-    #    print(" ".join(f"{b:02X}" for b in full_frame[2:]))
+
     ser.write(full_frame)
-
-'''
-send_l3_rnd(ser, result)
-result["n"] += 1  # Increment nonce for next command
-response = read_frame(ser)
-if DEBUG:
-    print("\n📥 Odpověď z TROPIC01:")
-    print(" ".join(f"{b:02X}" for b in response))
-
-print()
-print("🔄 Odesílám trigger pro získání odpovědi...")
-trigger_get_response(ser)
-response = read_frame(ser)
-if DEBUG:
-    print("\n📥 Odpověď z TROPIC01:")
-    print(" ".join(f"{b:02X}" for b in response))
-'''
 
 send_l3_ping(ser, result)
 response = read_frame(ser)
 
-trigger_get_response(ser)
+trigger_get_response(ser) # dunno why this is needed
 response = read_frame(ser)
-if DEBUG:
-    print("\n📥 Odpověď z TROPIC01:")
-    print(" ".join(f"{b:02X}" for b in response))
-
-trigger_get_response(ser)
-response = read_frame(ser)
-if DEBUG:
-    print("\n📥 Odpověď z TROPIC01:")
-    print(" ".join(f"{b:02X}" for b in response))
+print("\n📥 Odpověď z TROPIC01:")
+print(" ".join(f"{b:02X}" for b in response))
 
 res_size = response[0] | (response[1] << 8)
 ciphertext = response[2:]
